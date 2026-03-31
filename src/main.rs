@@ -15,9 +15,10 @@ use crossterm::{
 };
 use ratatui::{
     backend::{ Backend, CrosstermBackend },
-    layout::{ Constraint, Direction, Layout },
+    layout::{ Constraint, Direction, Layout, Rect },
     style::{ Color, Modifier, Style },
-    widgets::{ Block, Borders, Paragraph },
+    text::{ Line, Span },
+    widgets::{ Block, Borders, List, ListItem, Paragraph },
     Terminal,
 };
 
@@ -49,6 +50,66 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn render_thread_list(f: &mut ratatui::Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = app.threads
+        .iter()
+        .map(|t| {
+            let unread = if t.unread_count > 0 {
+                format!(" [{}]", t.unread_count)
+            } else {
+                "".to_string()
+            };
+            let content = vec![
+                Line::from(
+                    vec![
+                        Span::styled(
+                            format!("@{:<15}", t.username),
+                            Style::default().add_modifier(Modifier::BOLD)
+                        ),
+                        Span::styled(unread, Style::default().fg(Color::Yellow))
+                    ]
+                ),
+                Line::from(
+                    vec![
+                        Span::styled(
+                            format!("  {}", t.last_message),
+                            Style::default().fg(Color::DarkGray)
+                        )
+                    ]
+                )
+            ];
+            ListItem::new(content)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Inbox "))
+        .highlight_style(Style::default().bg(Color::Rgb(63, 63, 63)).add_modifier(Modifier::BOLD))
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(list, area, &mut app.thread_list_state);
+}
+
+fn render_message_view(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let thread_index = app.thread_list_state.selected();
+    let thread = thread_index.and_then(|idx| app.threads.get(idx));
+    let title = thread
+        .map(|t| format!(" Chat with @{} ", t.username))
+        .unwrap_or_else(|| " Chat ".to_string());
+
+    let block = Block::default().borders(Borders::ALL).title(title);
+
+    let text = if let Some(t) = thread {
+        format!("Last message: {}\n\n(Press Esc to go back to Inbox)", t.last_message)
+    } else {
+        "No thread selected".to_string()
+    };
+
+    let paragraph = Paragraph::new(text).block(block).wrap(ratatui::widgets::Wrap { trim: true });
+
+    f.render_widget(paragraph, area);
 }
 
 async fn run_app<B: Backend>(
@@ -139,15 +200,11 @@ async fn run_app<B: Backend>(
                         active_rect.y + 1,
                     ));
                 }
-                _ => {
-                    let text = match app.current_screen {
-                        Screen::Login => unreachable!(),
-                        Screen::ThreadList => "Thread List (Tab: Messages, Alt+L: Logout, q: Quit)",
-                        Screen::MessageView => "Messages (Esc: Back to List, q: Quit)",
-                    };
-
-                    let paragraph = Paragraph::new(text);
-                    f.render_widget(paragraph, inner_area);
+                Screen::ThreadList => {
+                    render_thread_list(f, app, inner_area);
+                }
+                Screen::MessageView => {
+                    render_message_view(f, app, inner_area);
                 }
             }
         })?;
@@ -188,10 +245,19 @@ async fn run_app<B: Backend>(
                                 db.clear_session()?;
                                 app.logout();
                             }
-                            KeyCode::Esc => {
+                            KeyCode::Esc if app.current_screen == Screen::MessageView => {
                                 app.prev_screen();
                             }
-                            _ => {}
+                            _ => {
+                                if app.current_screen == Screen::ThreadList {
+                                    match key.code {
+                                        KeyCode::Down | KeyCode::Char('j') => app.next_thread(),
+                                        KeyCode::Up | KeyCode::Char('k') => app.previous_thread(),
+                                        KeyCode::Enter => app.next_screen(),
+                                        _ => {}
+                                    }
+                                }
+                            }
                         }
                     }
                 }
