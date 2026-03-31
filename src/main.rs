@@ -1,7 +1,10 @@
 use std::{ error::Error, io };
 
 mod app;
+mod db;
+
 use crate::app::{ App, Screen, LoginField };
+use crate::db::Database;
 use figlet_rs::FIGfont;
 use tui_input::backend::crossterm::EventHandler;
 
@@ -26,8 +29,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
+    let db = Database::new("instui.db")?;
     let mut app = App::new();
-    let res = run_app(&mut terminal, &mut app).await;
+
+    // Try to load existing session
+    if let Some((username, _token)) = db.get_session()? {
+        app.username_input = tui_input::Input::from(username);
+        app.current_screen = Screen::ThreadList;
+    }
+
+    let res = run_app(&mut terminal, &mut app, &db).await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
@@ -42,7 +53,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
-    app: &mut App
+    app: &mut App,
+    db: &Database
 ) -> Result<(), Box<dyn Error>>
     where B::Error: 'static
 {
@@ -130,7 +142,7 @@ async fn run_app<B: Backend>(
                 _ => {
                     let text = match app.current_screen {
                         Screen::Login => unreachable!(),
-                        Screen::ThreadList => "Thread List (Tab: Messages, Esc: Logout, q: Quit)",
+                        Screen::ThreadList => "Thread List (Tab: Messages, Alt+L: Logout, q: Quit)",
                         Screen::MessageView => "Messages (Esc: Back to List, q: Quit)",
                     };
 
@@ -150,7 +162,11 @@ async fn run_app<B: Backend>(
                             KeyCode::Enter => {
                                 match app.active_field {
                                     LoginField::Username => app.switch_field(),
-                                    LoginField::Password => app.next_screen(),
+                                    LoginField::Password => {
+                                        // "Simulate" a successful login and save it
+                                        db.save_session(app.username_input.value(), "fake-token")?;
+                                        app.next_screen();
+                                    }
                                 }
                             }
                             _ => {
@@ -166,7 +182,15 @@ async fn run_app<B: Backend>(
                         match key.code {
                             KeyCode::Char('q') => app.quit(),
                             KeyCode::Tab => app.next_screen(),
-                            KeyCode::Esc => app.prev_screen(),
+                            KeyCode::Char('l') | KeyCode::Char('L') if
+                                key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
+                            => {
+                                db.clear_session()?;
+                                app.logout();
+                            }
+                            KeyCode::Esc => {
+                                app.prev_screen();
+                            }
                             _ => {}
                         }
                     }

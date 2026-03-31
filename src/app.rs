@@ -45,10 +45,17 @@ impl App {
         };
     }
 
+    pub fn logout(&mut self) {
+        self.current_screen = Screen::Login;
+        self.username_input = Input::default();
+        self.password_input = Input::default();
+        self.active_field = LoginField::Username;
+    }
+
     pub fn prev_screen(&mut self) {
         self.current_screen = match self.current_screen {
             Screen::Login => Screen::Login,
-            Screen::ThreadList => Screen::Login,
+            Screen::ThreadList => Screen::ThreadList,
             Screen::MessageView => Screen::ThreadList,
         };
     }
